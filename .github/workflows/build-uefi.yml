@@ -1,0 +1,44 @@
+name: Build UEFI (edk2-sm7150)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential uuid-dev iasl git nasm \
+            python3-distutils gcc-aarch64-linux-gnu abootimg
+
+      - name: Clone edk2
+        run: git clone https://github.com/tianocore/edk2.git --recursive --depth 1
+
+      - name: First run
+        run: |
+          chmod +x firstrun.sh build.sh || true
+          ./firstrun.sh
+
+      - name: Build
+        run: ./build.sh
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p out
+          find . -maxdepth 3 \( -name "*.img" -o -name "*.fd" -o -name "*.elf" \) \
+            -not -path "./edk2/*" -exec cp -v {} out/ \; || true
+          ls -la out
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: uefi-build
+          path: out/
+          if-no-files-found: warn

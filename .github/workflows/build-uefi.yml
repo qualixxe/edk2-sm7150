@@ -27,7 +27,9 @@ jobs:
           ./firstrun.sh
 
       - name: Build
-        run: ./build.sh
+        run: |
+          touch dummy.img ramdisk
+          ./build.sh
 
       - name: Collect artifacts
         run: |

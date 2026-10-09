@@ -8,10 +8,15 @@
 # phone's screen by FrameBufferSerialPortLib, which is how we see where a
 # boot stops when there is no working USB/UART console.
 set -e
-. build_common.sh
 
+# Read our own argument first, then clear the positional parameters. A
+# sourced script inherits the caller's "$@", and build_common.sh sources
+# edksetup.sh, which prints its usage and fails on any unexpected argument.
 TARGET="${1:-RELEASE}"
 SUFFIX="$(echo "$TARGET" | tr 'A-Z' 'a-z')"
+set --
+
+. build_common.sh
 
 bash clean.sh || true
 

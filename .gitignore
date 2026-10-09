@@ -16,3 +16,5 @@
 # Python bytecode from sm7150Pkg/tools
 __pycache__/
 *.pyc
+# local test images
+*.img

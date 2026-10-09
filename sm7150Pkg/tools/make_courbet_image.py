@@ -35,6 +35,7 @@ No mkbootimg required; the header is written directly.
 """
 
 import argparse
+import gzip
 import hashlib
 import struct
 import sys
@@ -68,6 +69,9 @@ PARTITION_SIZE = 0x8000000
 
 class Fail(Exception):
     pass
+
+
+notes: list = []
 
 
 def align_up(value, page):
@@ -113,9 +117,65 @@ def check_dtb(dtb: bytes, label: str):
     return total, ver
 
 
-def build_image(payload: bytes, dtb: bytes):
-    """kernel = payload || dtb, written into a header_version 0 boot image."""
-    kernel = payload + dtb
+WRAPPER_SIZE = 0x70
+
+
+def extract_firmware_volume(fd: bytes, label: str) -> bytes:
+    """Pull the bare EFI firmware volume out of an FD.
+
+    SM7150_UEFI.fd carries 32 KiB of preamble before the volume. The preamble
+    contains an MBN header and what looks like an ARM64 image magic at 0x38 -
+    but that magic sits in 0xFF padding with no code behind it, so the boot
+    stub the loader jumps to does not exist. Jumping there faults, which is why
+    the device hangs instead of booting.
+
+    Only the volume itself is usable. The signature sits 40 bytes into
+    EFI_FIRMWARE_VOLUME_HEADER, so the volume starts 40 bytes earlier, and its
+    length is authoritative.
+    """
+    sig = fd.find(b"_FVH")
+    if sig < 40:
+        raise Fail(f"{label}: no EFI firmware volume found")
+    start = sig - 40
+    length = int.from_bytes(fd[start + 32 : start + 40], "little")
+    if length <= 0 or start + length > len(fd):
+        raise Fail(
+            f"{label}: firmware volume claims {length} bytes at 0x{start:x}, "
+            f"which does not fit in {len(fd)}"
+        )
+    fs_guid = fd[start + 16 : start + 32]
+    if fs_guid != bytes.fromhex("78e58c8c3d8a1c4f99358961 85c32dd3".replace(" ", "")):
+        # Not fatal, but a bare volume normally carries EFI_FIRMWARE_FILE_SYSTEM2.
+        notes.append(
+            "firmware volume filesystem GUID is %s, not EFI_FIRMWARE_FILE_SYSTEM2"
+            % fs_guid.hex()
+        )
+    return fd[start : start + length]
+
+
+def build_kernel(payload: bytes, dtb: bytes, already_compressed: bool) -> bytes:
+    """kernel = payload || dtb.
+
+    The device tree has to ride inside the kernel payload. Putting it in a
+    header field instead - the stock Android convention, dtb_size at offset
+    1648 - does not reach the firmware, which only ever sees the kernel. That
+    single difference is why the same firmware hung on the Mi logo when the
+    device tree was left in the header.
+    """
+    if already_compressed:
+        kernel = payload
+    else:
+        kernel = gzip.compress(payload, compresslevel=9, mtime=0)
+        if len(kernel) >= len(payload):
+            raise Fail("compression did not shrink the payload at all")
+        # The round-trip check is the one that matters: it confirms the stream
+        # is well formed and still carries the ARM64 magic the loader looks for.
+        check_firmware(gzip.decompress(kernel), "compressed kernel")
+    return kernel + dtb
+
+
+def build_image(kernel: bytes):
+    """Wrap a kernel payload into a header_version 0 Android boot image."""
     header = bytearray(PAGE_SIZE)
     header[0:8] = BOOT_MAGIC
     struct.pack_into("<I", header, 8, len(kernel))
@@ -150,7 +210,9 @@ def build_image(payload: bytes, dtb: bytes):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--payload", required=True, help="gzip member holding MBN || ARM64 image")
+    ap.add_argument("--payload", help="gzip member holding MBN || ARM64 image")
+    ap.add_argument("--fd", help="SM7150_UEFI.fd: its firmware volume is extracted and wrapped")
+    ap.add_argument("--wrapper", help="112 byte MBN boot stub, required with --fd")
     ap.add_argument("--dtb", required=True, help="board device tree to append to the kernel")
     ap.add_argument("--out", required=True, help="boot image to write")
     ap.add_argument("--pad-to-partition", action="store_true",
@@ -159,12 +221,43 @@ def main():
                     help="reference surya image: reproduce it from the same payload and compare")
     args = ap.parse_args()
 
+    if not args.payload and not args.fd:
+        ap.error("pass --payload or --fd")
+    if args.fd and not args.wrapper:
+        ap.error("--fd requires --wrapper")
+
     try:
-        payload, inflated = load_payload(Path(args.payload))
+        if args.fd:
+            # SM7150_UEFI.fd is not bootable: its ARM64 magic sits in padding
+            # with no code behind it. Lift the firmware volume out and put it
+            # behind the MBN boot stub, which is the arrangement the loader
+            # actually accepts.
+            raw_fd = Path(args.fd).read_bytes()
+            sig = raw_fd.find(b"_FVH")
+            volume = extract_firmware_volume(raw_fd, args.fd)
+            wrapper = Path(args.wrapper).read_bytes()
+            if len(wrapper) != WRAPPER_SIZE:
+                raise Fail("wrapper is %d bytes, expected %d" % (len(wrapper), WRAPPER_SIZE))
+            if wrapper[0x38:0x3C] != b"ARM\x64":
+                raise Fail("wrapper has no ARM64 image magic at 0x38")
+            if wrapper[0x40:0x48] == b"\xff" * 8:
+                raise Fail("wrapper has no code at 0x40 - it would fault on entry")
+            payload = wrapper + volume
+            inflated = payload
+            print("fd      : %s" % args.fd)
+            print("         %d bytes, volume at 0x%x length %d"
+                  % (len(raw_fd), sig - 40, len(volume)))
+            print("wrapper : %d bytes with a real boot stub" % len(wrapper))
+        else:
+            payload, inflated = load_payload(Path(args.payload))
         dtb = Path(args.dtb).read_bytes()
 
-        print("payload : %s" % args.payload)
-        print("         %d bytes compressed, %d bytes inflated" % (len(payload), len(inflated)))
+        print("payload : %s" % (args.fd or args.payload))
+        print("         %d bytes" % len(payload))
+        if args.fd:
+            print("         uncompressed; treated as a complete wrapped payload")
+        else:
+            print("         %d bytes compressed, %d bytes inflated" % (len(payload), len(inflated)))
         fv = check_firmware(inflated, "payload")
         print("         ARM64 image magic at 0x38 OK, firmware volume at 0x%x" % fv)
 
@@ -181,7 +274,7 @@ def main():
             ref_payload, ref_dtb = split_payload(ref_kernel)
             if ref_payload != payload:
                 raise Fail("stored payload differs from the reference image")
-            rebuilt = build_image(payload, ref_dtb)
+            rebuilt = build_image(build_kernel(payload, ref_dtb, True))
             if rebuilt == ref:
                 print("verify  : reproduced the reference image byte for byte")
             else:
@@ -203,7 +296,7 @@ def main():
                     print("          0x%03x %-16s rebuilt=%02x reference=%02x"
                           % (i, field or "?", rebuilt[i], ref[i]))
 
-        image = build_image(payload, dtb)
+        image = build_image(build_kernel(payload, dtb, not args.fd))
         if len(image) > PARTITION_SIZE:
             raise Fail("image exceeds the %d byte boot partition" % PARTITION_SIZE)
         if args.pad_to_partition:

@@ -89,6 +89,67 @@ jobs:
           # od is coreutils; xxd comes from vim-common and is not guaranteed.
           head -c 8 out/boot-courbet-release.img | od -c
 
+      - name: Build bootable courbet image
+        run: |
+          set -e
+          mkdir -p out
+
+          # This is the image that is actually known to boot on courbet.
+          #
+          # build.sh produces a kernel the bootloader rejects: it gzips a plain
+          # EFI firmware volume, which has no ARM64 image magic at offset 0x38.
+          # The bootloader inflates the kernel and looks for that magic, then
+          # hands over. A bootable image instead carries a prebuilt
+          # "MBN header || ARM64 image" payload with the board DTB appended
+          # after the compressed stream.
+          #
+          # The firmware comes from payloads/, the DTB is this repository's own
+          # qcom-courbet.dtb. See payloads/README.md for the full rationale.
+          python3 sm7150Pkg/tools/make_courbet_image.py \
+            --payload payloads/sm7150-uefi-surya-payload.gz \
+            --dtb     qcom-courbet.dtb \
+            --out     out/xiaomi-courbet.img
+
+          # Padded to the full boot partition (fastboot: 0x8000000), ready to
+          # write with `fastboot flash boot`.
+          python3 sm7150Pkg/tools/make_courbet_image.py \
+            --payload payloads/sm7150-uefi-surya-payload.gz \
+            --dtb     qcom-courbet.dtb \
+            --out     out/xiaomi-courbet-128m.img \
+            --pad-to-partition
+
+      - name: Validate bootable image
+        run: |
+          set -e
+          python3 - <<'PY'
+          import struct, sys, zlib
+          p = "out/xiaomi-courbet.img"
+          d = open(p, "rb").read()
+          assert d[:8] == b"ANDROID!", "not an Android boot image"
+          ks = struct.unpack_from("<I", d, 8)[0]
+          page = struct.unpack_from("<I", d, 36)[0]
+          hv = struct.unpack_from("<I", d, 40)[0]
+          kernel = d[page:page+ks]
+          o = zlib.decompressobj(16 + zlib.MAX_WBITS)
+          inflated = o.decompress(kernel); o.flush()
+          dtb = kernel[len(kernel)-len(o.unused_data):]
+
+          print(f"image       : {p}  {len(d)} bytes")
+          print(f"header      : version={hv} page={page}")
+          print(f"kernel      : {ks} bytes")
+          print(f"  ARM64 magic at 0x38 : {inflated[0x38:0x3c]!r}")
+          assert inflated[0x38:0x3c] == b"ARM\x64", "no ARM64 image magic - loader will reject"
+          assert b"_FVH" in inflated, "no EFI firmware volume in the payload"
+          print(f"  _FVH at   : 0x{inflated.find(b'_FVH'):x}")
+          print(f"dtb         : {len(dtb)} bytes, magic {dtb[:4].hex()}")
+          assert dtb[:4] == b"\xd0\x0d\xfe\xed", "device tree missing"
+          assert struct.unpack_from(">I", dtb, 4)[0] == len(dtb), "DTB totalsize mismatch"
+          print("validation OK")
+          PY
+          echo ""
+          echo "=== artifacts ==="
+          ls -la out
+
       - name: Upload
         uses: actions/upload-artifact@v4
         with:

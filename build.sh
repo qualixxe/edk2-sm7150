@@ -1,11 +1,20 @@
 #!/bin/bash
-# based on the instructions from edk2-platform
 set -e
 . build_common.sh
-# not actually GCC5; it's GCC7 on Ubuntu 18.04.
-bash clean.sh
-GCC5_AARCH64_PREFIX=aarch64-linux-gnu- build -s -n 0 -a AARCH64 -t GCC5 -p sm7150Pkg/qcom-sdmmagpie.dsc -b RELEASE
-gzip -c < workspace/Build/sdmmagpie/RELEASE_GCC5/FV/SM7150_UEFI.fd >uefi.img
-cat qcom-sdmmagpie.dtb >>uefi.img
+
+bash clean.sh || true
+
+GCC5_AARCH64_PREFIX=aarch64-linux-gnu- build -s -n 0 -a AARCH64 -t GCC5 \
+  -p sm7150Pkg/qcom-courbet.dsc -b RELEASE
+
+gzip -c < workspace/Build/courbet/RELEASE_GCC5/FV/SM7150_UEFI.fd > uefi.img
 echo > ramdisk
-abootimg --create boot-sdmmagpie.img -k uefi.img -r ramdisk
+
+mkbootimg \
+  --header_version 2 \
+  --base 0x0 --pagesize 4096 \
+  --kernel_offset 0x8000 --ramdisk_offset 0x1000000 \
+  --tags_offset 0x100 --dtb_offset 0x1f00000 \
+  --kernel uefi.img --ramdisk ramdisk \
+  --dtb qcom-courbet.dtb \
+  -o boot-courbet.img

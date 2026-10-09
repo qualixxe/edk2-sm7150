@@ -1,46 +1,105 @@
-name: Build UEFI (edk2-sm7150)
+name: Build UEFI (edk2-sm7150 / courbet)
 
 on:
+  push:
+    branches: [main]
+  pull_request:
   workflow_dispatch:
+
+# A superseded run is pointless work; stop it when a new commit lands.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
+    # 22.04 = Python 3.10. Newer distros dropped distutils, which BaseTools
+    # still relies on, so the runner version is deliberate.
     runs-on: ubuntu-22.04
+    timeout-minutes: 120
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          # Common/edk2 is a submodule and is what build_common.sh actually
+          # builds against. actions/checkout pins it to the commit recorded in
+          # the tree, which keeps builds reproducible.
           submodules: recursive
+          fetch-depth: 1
 
-      - name: Dependencies
+      - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential uuid-dev iasl git nasm \
-            python3-distutils gcc-aarch64-linux-gnu abootimg mkbootimg
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            gcc-aarch64-linux-gnu \
+            uuid-dev \
+            iasl \
+            nasm \
+            git \
+            python3 \
+            python3-setuptools \
+            zip \
+            unzip \
+            abootimg \
+            mkbootimg
 
-      - name: Clone edk2
-        run: git clone https://github.com/tianocore/edk2.git --recursive --depth 1
-
-      - name: First run
+      - name: Verify toolchain
         run: |
-          chmod +x firstrun.sh build.sh || true
+          set -e
+          aarch64-linux-gnu-gcc --version | head -1
+          python3 --version
+          iasl -v 2>&1 | head -2
+          mkbootimg --help >/dev/null 2>&1 || echo "warning: mkbootimg has no --help, continuing"
+
+      - name: Build BaseTools
+        run: |
+          set -e
+          chmod +x firstrun.sh build.sh build_common.sh clean.sh
           ./firstrun.sh
 
-      - name: Build
+      - name: Build firmware
         run: |
-          touch dummy.img ramdisk
+          set -e
+          # build.sh produces workspace/Build/courbet/RELEASE_GCC5/FV/SM7150_UEFI.fd,
+          # gzips it into uefi.img, then wraps it with the courbet DTB via
+          # mkbootimg into boot-courbet.img.
           ./build.sh
 
       - name: Collect artifacts
         run: |
+          set -e
+          cd "$GITHUB_WORKSPACE"
+
+          FD=workspace/Build/courbet/RELEASE_GCC5/FV/SM7150_UEFI.fd
+
+          # Fail loudly here rather than reporting a green run with no output.
+          for f in boot-courbet.img uefi.img "$FD"; do
+            if [ ! -f "$f" ]; then
+              echo "::error::expected build output missing: $f"
+              exit 1
+            fi
+          done
+
           mkdir -p out
-          find . -maxdepth 3 \( -name "*.img" -o -name "*.fd" -o -name "*.elf" \) \
-            -not -path "./edk2/*" -exec cp -v {} out/ \; || true
+          cp -v boot-courbet.img out/
+          cp -v uefi.img out/
+          cp -v "$FD" out/
+
+          echo ""
+          echo "=== artifacts ==="
           ls -la out
+          echo ""
+          echo "=== boot-courbet.img header (expect ANDROID! magic) ==="
+          # od is coreutils; xxd comes from vim-common and is not guaranteed.
+          head -c 8 out/boot-courbet.img | od -c
 
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: uefi-build
+          name: uefi-courbet
           path: out/
-          if-no-files-found: warn
+          # 'error' is the point: a failed build must not look successful.
+          if-no-files-found: error
+          retention-days: 30

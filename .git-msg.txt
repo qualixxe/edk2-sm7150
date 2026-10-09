@@ -1,6 +1,0 @@
-build.sh: keep the build target out of sourced scripts
-
-A sourced script inherits the caller's positional parameters, so passing
-RELEASE to build.sh reached edksetup.sh via build_common.sh, which then
-printed its usage and exited 1. Capture the target and clear the positional
-parameters before sourcing.

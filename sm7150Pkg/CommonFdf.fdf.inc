@@ -59,7 +59,7 @@
 # not find the MBN header it expects.
 [Rule.Common.SEC]
   FILE SEC = $(NAMED_GUID) RELOCS_STRIPPED {
-    FREEFORM_SUBTYPE_GUID 04132C8D-0A22-4FA8-826E-8BBFEFDB836C {
+    SUBTYPE_GUID 04132C8D-0A22-4FA8-826E-8BBFEFDB836C {
       RAW = sm7150Pkg/Binary/MbnHeader.raw
     }
     TE  TE Align = 4K                  $(INF_OUTPUT)/$(MODULE_NAME).efi

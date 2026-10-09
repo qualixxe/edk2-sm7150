@@ -1,16 +1,18 @@
-# Python bytecode from the image tools
-__pycache__/
-*.pyc
-
-# Build workspace produced by firstrun.sh / build.sh
-/workspace/
-/out/
-
-# build.sh outputs
-/boot-courbet-*.img
-/uefi-*.img
+#Build Script
+/uefi.img
+/boot-a72q*.img
 /ramdisk
+/workspace
+
+#VSCode
+.vscode
+
+# Build outputs of build.sh (RELEASE/DEBUG variants)
+/out/
+/uefi-*.img
+/boot-courbet-*.img
 /dummy.img
 
-# edk2 submodule is fetched by CI via .gitmodules
-/Common/edk2/
+# Python bytecode from sm7150Pkg/tools
+__pycache__/
+*.pyc

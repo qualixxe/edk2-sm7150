@@ -59,41 +59,35 @@ jobs:
           chmod +x firstrun.sh build.sh build_common.sh clean.sh
           ./firstrun.sh
 
-      - name: Build firmware
+      - name: Build firmware (RELEASE + DEBUG)
         run: |
           set -e
-          # build.sh produces workspace/Build/courbet/RELEASE_GCC5/FV/SM7150_UEFI.fd,
-          # gzips it into uefi.img, then wraps it with the courbet DTB via
-          # mkbootimg into boot-courbet.img.
-          ./build.sh
-
-      - name: Collect artifacts
-        run: |
-          set -e
-          cd "$GITHUB_WORKSPACE"
-
-          FD=workspace/Build/courbet/RELEASE_GCC5/FV/SM7150_UEFI.fd
-
-          # Fail loudly here rather than reporting a green run with no output.
-          for f in boot-courbet.img uefi.img "$FD"; do
-            if [ ! -f "$f" ]; then
-              echo "::error::expected build output missing: $f"
-              exit 1
-            fi
-          done
-
           mkdir -p out
-          cp -v boot-courbet.img out/
-          cp -v uefi.img out/
-          cp -v "$FD" out/
+
+          # --- RELEASE: the firmware we actually want -----------------------
+          ./build.sh RELEASE
+          cp -v boot-courbet-release.img out/
+          cp -v uefi-release.img out/
+          cp -v workspace/Build/courbet/RELEASE_GCC5/FV/SM7150_UEFI.fd out/SM7150_UEFI-release.fd
+
+          # --- DEBUG: same firmware, but prints its log onto the screen -----
+          # Used only to see how far the boot gets. Not fatal if it does not
+          # fit into the 2 MB FD, so keep going and still upload RELEASE.
+          if ./build.sh DEBUG; then
+            cp -v boot-courbet-debug.img out/
+            cp -v uefi-debug.img out/
+            cp -v workspace/Build/courbet/DEBUG_GCC5/FV/SM7150_UEFI.fd out/SM7150_UEFI-debug.fd
+          else
+            echo "::warning::DEBUG build failed (see log above); RELEASE artifacts are still uploaded"
+          fi
 
           echo ""
           echo "=== artifacts ==="
           ls -la out
           echo ""
-          echo "=== boot-courbet.img header (expect ANDROID! magic) ==="
+          echo "=== boot-courbet-release.img header (expect ANDROID! magic) ==="
           # od is coreutils; xxd comes from vim-common and is not guaranteed.
-          head -c 8 out/boot-courbet.img | od -c
+          head -c 8 out/boot-courbet-release.img | od -c
 
       - name: Upload
         uses: actions/upload-artifact@v4

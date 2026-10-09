@@ -133,8 +133,8 @@
   gEfiMdeModulePkgTokenSpaceGuid.PcdEmuVariableNvModeEnable|TRUE
 
   gsm7150PkgTokenSpaceGuid.PcdMipiFrameBufferAddress|0x9c000000
-  gsm7150PkgTokenSpaceGuid.PcdMipiFrameBufferWidth|1440
-  gsm7150PkgTokenSpaceGuid.PcdMipiFrameBufferHeight|2880
+  gsm7150PkgTokenSpaceGuid.PcdMipiFrameBufferWidth|1080
+  gsm7150PkgTokenSpaceGuid.PcdMipiFrameBufferHeight|2400
 
   gEfiMdeModulePkgTokenSpaceGuid.PcdAcpiExposedTableVersions|0x20
 

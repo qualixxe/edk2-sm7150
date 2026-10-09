@@ -42,8 +42,26 @@
 #
 ############################################################################
 
+# The SEC file is read by the bootloader, not by EDK2's dispatcher, and it is
+# picky about how the MBN header is wrapped.
+#
+# A firmware volume that boots on this device - the surya one this repository
+# reuses as a payload - has SEC_CORE 44984 bytes with its sections as
+# FREEFORM_SUBTYPE_GUID + TE:
+#
+#   3E401783-CC94-4FCD-97BC-BD35AC369D2F  SEC_CORE  44984
+#     FREEFORM_SUBTYPE_GUID(244)   subtype 04132C8D-0A22-4FA8-826E-8BBFEFDB836C
+#     TE(44716)
+#
+# This rule used to emit TE alone, which produced SEC_CORE 31512 bytes wrapping
+# it in RAW, and that image sat on the splash screen without ever starting DXE.
+# The GUID is the one the loader looks for; emitting RAW instead means it does
+# not find the MBN header it expects.
 [Rule.Common.SEC]
   FILE SEC = $(NAMED_GUID) RELOCS_STRIPPED {
+    FREEFORM_SUBTYPE_GUID 04132C8D-0A22-4FA8-826E-8BBFEFDB836C {
+      RAW = sm7150Pkg/Binary/MbnHeader.raw
+    }
     TE  TE Align = 4K                  $(INF_OUTPUT)/$(MODULE_NAME).efi
   }
 

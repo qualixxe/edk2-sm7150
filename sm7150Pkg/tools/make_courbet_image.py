@@ -94,7 +94,7 @@ def load_payload(path: Path):
     return blob, inflated
 
 
-def check_firmware(inflated: bytes, label: str):
+def check_firmware(inflated: bytes, label: str, require_efi: bool = True) -> int:
     magic = inflated[ARM64_MAGIC_OFFSET : ARM64_MAGIC_OFFSET + 4]
     if magic != ARM64_MAGIC:
         raise Fail(
@@ -102,9 +102,16 @@ def check_firmware(inflated: bytes, label: str):
             f"(got {magic!r}). The bootloader would reject this kernel."
         )
     fv = inflated.find(b"_FVH")
-    if fv < 0:
+    if fv < 0 and require_efi:
         raise Fail(f"{label}: no EFI firmware volume (_FVH) in the payload")
-    return fv
+    if fv < 0:
+        # Not an error for a plain bootloader such as U-Boot; say so plainly so
+        # nobody reads a missing signature as a successful EFI payload.
+        notes.append(
+            f"{label}: no _FVH, so this is not an EFI firmware volume - "
+            "expected for a U-Boot payload"
+        )
+    return fv if fv >= 0 else -1
 
 
 def check_dtb(dtb: bytes, label: str):
@@ -170,7 +177,7 @@ def build_kernel(payload: bytes, dtb: bytes, already_compressed: bool) -> bytes:
             raise Fail("compression did not shrink the payload at all")
         # The round-trip check is the one that matters: it confirms the stream
         # is well formed and still carries the ARM64 magic the loader looks for.
-        check_firmware(gzip.decompress(kernel), "compressed kernel")
+        check_firmware(gzip.decompress(kernel), "compressed kernel", not args.allow_non_uefi)
     return kernel + dtb
 
 
@@ -219,6 +226,9 @@ def main():
                     help=f"pad the image to the full boot partition ({PARTITION_SIZE} bytes)")
     ap.add_argument("--verify", default=None,
                     help="reference surya image: reproduce it from the same payload and compare")
+    ap.add_argument("--allow-non-uefi", action="store_true",
+                    help="payload is a bootloader (e.g. U-Boot), not an EFI firmware volume: "
+                         "still checks the ARM64 magic and the device tree, skips _FVH")
     args = ap.parse_args()
 
     if not args.payload and not args.fd:
@@ -258,8 +268,9 @@ def main():
             print("         uncompressed; treated as a complete wrapped payload")
         else:
             print("         %d bytes compressed, %d bytes inflated" % (len(payload), len(inflated)))
-        fv = check_firmware(inflated, "payload")
-        print("         ARM64 image magic at 0x38 OK, firmware volume at 0x%x" % fv)
+        fv = check_firmware(inflated, "payload", not args.allow_non_uefi)
+        where = ", firmware volume at 0x%x" % fv if fv >= 0 else ""
+        print("         ARM64 image magic at 0x38 OK" + where)
 
         total, ver = check_dtb(dtb, args.dtb)
         print("dtb     : %s" % args.dtb)

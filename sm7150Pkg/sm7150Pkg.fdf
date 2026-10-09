@@ -26,12 +26,23 @@
 
 [FD.SM7150_UEFI]
 BaseAddress   = 0x9FC00000|gArmTokenSpaceGuid.PcdFdBaseAddress  # The base address of the Firmware in NOR Flash.
-Size          = 0x00200000|gArmTokenSpaceGuid.PcdFdSize         # The size in bytes of the FLASH Device
+# 3 MiB, not 2. The platform memory map this firmware runs under - read out of
+# the uefiplat.cfg embedded in the surya firmware that boots - asks for:
+#
+#   0x9FC00000, 0x00300000, "UEFI FD",   AddMem
+#   0x9FF00000, 0x0008C000, "SEC Heap",  AddMem
+#
+# 0x9FC00000 + 0x300000 == 0x9FF00000 exactly, so the flash device fills the
+# window between its own base and the SEC Heap with nothing to spare. At 2 MiB
+# the volume ended a megabyte short of that window, and the build sat on the
+# splash screen with no display: SEC starts, does not find a firmware of the
+# expected size, and DXE never comes up.
+Size          = 0x00300000|gArmTokenSpaceGuid.PcdFdSize         # The size in bytes of the FLASH Device
 ErasePolarity = 1
 
 # This one is tricky, it must be: BlockSize * NumBlocks = Size
 BlockSize     = 0x00001000
-NumBlocks     = 0x200
+NumBlocks     = 0x300
 
 ################################################################################
 #
@@ -492,6 +503,25 @@ READ_LOCK_STATUS   = TRUE
     SECTION PE32 = sm7150Pkg/Binary/UFSDxe/UFSDxe.efi
     SECTION UI = "UFSDxe"
   }
+
+# The platform memory map and boot parameters.
+#
+# The bootloader hands this to SEC before DXE runs; SEC sets up memory exactly as
+# described here and then hunts for the firmware in the window it reserves. It is
+# read by the firmware, not by EDK2, so it has to be byte-identical in the fields
+# that matter.
+#
+# Extracted from the surya firmware that boots, rather than written from
+# documentation. The entry that matters most:
+#
+#   0x9FC00000, 0x00300000, "UEFI FD",  AddMem, SYS_MEM, SYS_MEM_CAP, BsData
+#
+# which is why [FD.SM7150_UEFI] above declares 3 MiB. It also sets
+# DefaultBDSBootApp, EnableShell and the SEC Heap placement that follows it.
+FILE FREEFORM = DDE58710-41CD-4306-DBFB-3FA90BB1D2DD {
+  SECTION UI = "uefiplat.cfg"
+  SECTION RAW = sm7150Pkg/Binary/uefiplat.cfg
+}
 
 [FV.FVMAIN_COMPACT]
 FvAlignment        = 8
